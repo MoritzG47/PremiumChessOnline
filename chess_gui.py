@@ -28,22 +28,19 @@ TIME = 5
 
 ################
 
-from PyQt5.QtWidgets import QWidget, QApplication, QSystemTrayIcon, QMenu, QAction
+from PyQt5.QtWidgets import QWidget, QApplication, QSystemTrayIcon, QMenu, QAction, QLabel
 from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QPixmap, QFontMetrics, QIcon, QTransform, QPainterPath
 from PyQt5.QtCore import QRectF, Qt, QPointF
 from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtCore import QTimer, QElapsedTimer, QRect, QUrl
 from PyQt5.QtMultimedia import QSoundEffect
-from PyQt5.QtWidgets import QLabel, QVBoxLayout, QGraphicsOpacityEffect
 from PyQt5.QtCore import QPropertyAnimation, QEasingCurve, QParallelAnimationGroup
 from screeninfo import get_monitors
-import sys
-import time
-import math
-import os
+import sys, os, math, csv, copy
 import pprint
-import copy
-import csv
+from PyQt5.QtWebSockets import QWebSocket
+from PyQt5.QtCore import QUrl
+from PyQt5.QtNetwork import QAbstractSocket
 
 ### Base GUI Element Class ###
 class GuiElement:
@@ -488,6 +485,70 @@ class Textbox(GuiElement):
         """Reset scrollbar mode on drag release."""
         self.scrollbar_mode = 0
 
+class WebSocketClient:
+    def __init__(self, player_name, parent=None):
+        super().__init__()
+        self.parent = parent
+        self.player_name = player_name
+        self.websocket = QWebSocket()
+        self.connect_to_server()     
+      
+        # WebSocket signals
+        self.websocket.connected.connect(self.on_connected)
+        self.websocket.disconnected.connect(self.on_disconnected)
+        self.websocket.textMessageReceived.connect(self.on_message_received)
+        self.websocket.error.connect(self.on_error)
+        
+    def connect_to_server(self):
+        # Change this URL to match your server
+        url = QUrl("wss://superdiabolically-tres-kingston.ngrok-free.dev/ws")    #"ws://localhost:8000/ws"
+        self.websocket.open(url)
+        
+    def disconnect_from_server(self):
+        self.websocket.close()
+        
+    def send_message(self, msg):
+        message = msg
+        # Check if connected using state() method
+        if message and self.websocket.state() == QAbstractSocket.ConnectedState:
+            self.websocket.sendTextMessage(f"{message}")
+            #print(f"You: {message}")
+        elif message:
+            print("Not connected to server!")
+            
+    def on_connected(self):
+        self.parent.connected = True
+        self.parent.update()
+        print("Connected to server!")
+
+    def on_disconnected(self):
+        self.parent.connected = False
+        self.parent.gameconnected = False
+        self.parent.update()
+        print("Disconnected from server!")
+        
+    def on_message_received(self, message):
+        if "init" in message:
+            self.parent.side = int(message.split(":")[-1])
+            print(f"Assigned side: {self.parent.side}")
+        elif "promotion" in message:
+            self.parent.promote_pawn(message)
+        elif message == "stop":
+            self.parent.gameconnected = False
+            self.parent.check = 4
+            self.parent.update()
+            print("Opponent disconnected!")
+        elif message == "start":
+            self.parent.gameconnected = True
+            self.parent.check = 0
+            self.parent.update()
+            print("Game started!")
+        else:
+            self.parent.make_move(message)
+            #print(f"Message received: {message}")
+        
+    def on_error(self, error):
+        print(f"WebSocket error: {error}")
 
 ### Knocked Pieces Object ###
 class KnockedPieces(GuiElement):
@@ -669,14 +730,15 @@ class Figure(GuiElement):
 
             if self.parent.check in [5, 6, 7, 8, 9]:
                 self.validMovesList = []
-            for pos in self.validMovesList:
-                x_highlight = self.topleft.x() + pos[0]*self.squaresize
-                y_highlight = self.topleft.y(
-                ) + (7-pos[1])*self.squaresize + self.MenuSize
-                painter.setBrush(QColor(150, 10, 30, 90))
-                painter.setPen(Qt.NoPen)
-                painter.drawRect(
-                    QRectF(x_highlight, y_highlight, self.squaresize, self.squaresize))
+            elif self.parent.check != 4:
+                for pos in self.validMovesList:
+                    x_highlight = self.topleft.x() + pos[0]*self.squaresize
+                    y_highlight = self.topleft.y(
+                    ) + (7-pos[1])*self.squaresize + self.MenuSize
+                    painter.setBrush(QColor(150, 10, 30, 90))
+                    painter.setPen(Qt.NoPen)
+                    painter.drawRect(
+                        QRectF(x_highlight, y_highlight, self.squaresize, self.squaresize))
 
         painter.drawPixmap(int(x), int(y), self.image)
 
@@ -826,6 +888,7 @@ class Figure(GuiElement):
         promo =None
         if hasattr(self, "PromotionCheck"):
             promo = self.PromotionCheck(new_pos)
+            self.parent.promotionpiece = None
         if hasattr(self, "has_moved"):
             self.has_moved = True
         if self.parent.check in [1, 2]:
@@ -904,9 +967,8 @@ class Figure(GuiElement):
 
     ### Actions ###
     def pick_up(self, mouse_pos):
-        if self.parent.check == 4:
+        if self.color != self.parent.side:
             self.validMovesList = []
-            return
         self.offset = mouse_pos - self.current_pos - \
             QPointF(self.squaresize/2, self.squaresize/2)
         self.mouse_pos = mouse_pos
@@ -925,6 +987,7 @@ class Figure(GuiElement):
         dropped_square = self.current_square(pos.x(), pos.y())
         if dropped_square in self.validMovesList:
             self.parent.selected = None
+            self.parent.Client.send_message(f"{self.pos[0]}{self.pos[1]}{dropped_square[0]}{dropped_square[1]}")
             self.move(dropped_square)
 
     def contains(self, pos):
@@ -1157,7 +1220,7 @@ class PromotionWindow(QWidget):
 
 ### Main Window ###
 class WindowGui(QWidget):
-    def __init__(self, width=get_monitors()[0].height*0.75, height=get_monitors()[0].height*0.75):
+    def __init__(self, width=get_monitors()[0].height*0.75, height=get_monitors()[0].height*0.75, side=0):
         super().__init__()
 
         monitor = get_monitors()[0]
@@ -1208,6 +1271,12 @@ class WindowGui(QWidget):
         self.MHList = []
         self.prevMHList = []
         self.fiftyMoveCounter = 0
+        self.side = side
+
+        self.Client = WebSocketClient("Client1", self)
+        self.promotionpiece = None
+        self.connected = False
+        self.gameconnected = False
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -1229,6 +1298,20 @@ class WindowGui(QWidget):
         painter.setBrush(QColor(0, 0, 0, 180))
         painter.setPen(Qt.NoPen)
         painter.drawPath(winrect)
+
+        connecttext = "Connected" if self.connected else "Disconnected"
+        connectcolor = QColor(0, 200, 0, 180) if self.connected else QColor(200, 0, 0, 180)
+        if self.side == -1:
+            connecttext = "Spectating"
+            connectcolor = QColor(100, 100, 100, 180)
+        painter.setPen(QPen(connectcolor))
+        painter.setFont(QFont('Arial', 12))
+        painter.drawText(QRectF(self.topleft.x() + 10, self.topleft.y() + 10, 350, 30), Qt.AlignLeft | Qt.AlignVCenter, "You: " + connecttext)
+        
+        connecttext = "Connected" if self.gameconnected else "Disconnected"
+        connectcolor = QColor(0, 200, 0, 180) if self.gameconnected else QColor(200, 0, 0, 180)
+        painter.setPen(QPen(connectcolor))
+        painter.drawText(QRectF(self.topleft.x() + self.WindowWidth - 700, self.topleft.y() + 10, 350, 30), Qt.AlignLeft | Qt.AlignVCenter, "Opponent: " + connecttext)
 
         self.chess_pattern(painter, BOARD_VARIANT)
 
@@ -1430,6 +1513,20 @@ class WindowGui(QWidget):
         for anim in animationList:
             self.content_group.addAnimation(anim)
 
+    def switch_clocks(self):
+        if self.WhiteClock.running:
+            self.WhiteClock.stop()
+            self.BlackClock.start()
+            self.WhiteClock.add_time(INCREMENT)
+        elif self.BlackClock.running:
+            self.BlackClock.stop()
+            self.WhiteClock.start()
+            self.BlackClock.add_time(INCREMENT)
+        else:
+            self.WhiteClock.add_time(INCREMENT)
+            self.BlackClock.start()
+            self.SM.play("game-start")
+
     def updateGameState(self):
         board = self.scanBoard()
         self.PinMap = copy.deepcopy(self.emptyMap)
@@ -1456,19 +1553,21 @@ class WindowGui(QWidget):
                 self.check = 7  # Stalemate
             self.EndGame(self.check)
 
-    def switch_clocks(self):
-        if self.WhiteClock.running:
-            self.WhiteClock.stop()
-            self.BlackClock.start()
-            self.WhiteClock.add_time(INCREMENT)
-        elif self.BlackClock.running:
-            self.BlackClock.stop()
-            self.WhiteClock.start()
-            self.BlackClock.add_time(INCREMENT)
-        else:
-            self.WhiteClock.add_time(INCREMENT)
-            self.BlackClock.start()
-            self.SM.play("game-start")
+    def current_square(self, x, y):
+            return (max(0, min(int((x - self.topleft.x()) // self.squaresize), 7)),
+                    max(0, min(int(7 - (y - self.topleft.y() - self.ExitSize) // self.squaresize), 7)))
+
+    def make_move(self, move: str):
+        try:
+            move = move.replace("Opponent: ", "")
+            board = self.scanBoard()
+            pos1 = (int(move[0]), int(move[1]))
+            pos2 = (int(move[2]), int(move[3]))
+            piece = board[pos1[1]][pos1[0]]
+            if piece is not None:
+                piece.move(pos2)
+        except Exception as e:
+            print("Error making move:", e)
 
     def check_hover(self, pos):
         for element in self._gui_elements:
@@ -1681,6 +1780,10 @@ class WindowGui(QWidget):
                         return
         self.prevMHList = self.MHList.copy()
 
+    def promote_pawn(self, message):
+        piece = message.replace("Opponent: promotion:", "")
+        self.promotionpiece = piece
+
     ## Window Control Methods ###
     def close_app(self):
         print("Exiting application")
@@ -1802,8 +1905,9 @@ class WindowGui(QWidget):
     def leaveEvent(self, event):
         self.update()
 
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    gui = WindowGui()
+    gui = WindowGui(side=0)
     gui.show()
     sys.exit(app.exec_())
