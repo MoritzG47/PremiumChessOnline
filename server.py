@@ -18,6 +18,7 @@ class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
         self.openside = [None, None]  
+        self.movelist = []
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -35,7 +36,7 @@ class ConnectionManager:
         else:
             # More than two clients, assign as spectator (-1)
             side = -1
-        await self.send_message(f"init:{side}", sender=None, recipient=websocket)
+        await self.send_message(f"init:{side}:prevmove:{self.movelist}", sender=None, recipient=websocket)
         print(f"New client connected. Total clients: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket):
@@ -55,6 +56,9 @@ class ConnectionManager:
         if self.openside[0] is None or self.openside[1] is None:
             print("A player disconnected, stopping the game.")
             await self.broadcast("stop", sender=None)
+        if self.openside[0] is None and self.openside[1] is None:
+            self.movelist.clear()
+            print("Both players disconnected, cleared move list.")
 
     async def broadcast(self, message: str, sender: WebSocket = None):
         disconnected_clients = []
@@ -91,6 +95,7 @@ async def websocket_endpoint(websocket: WebSocket):
             print(f"Received: {data}")
             # Broadcast to all other clients
             await manager.broadcast(f"Opponent: {data}", sender=websocket)
+            manager.movelist.append(data)
     except WebSocketDisconnect:
         print("WebSocketDisconnect exception caught - client disconnected normally")
         await manager.handle_disconnect(websocket)

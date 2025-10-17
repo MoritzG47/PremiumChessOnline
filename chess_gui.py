@@ -530,8 +530,22 @@ class WebSocketClient:
         
     def on_message_received(self, message):
         if "init" in message:
-            self.parent.side = int(message.split(":")[-1])
+            message = message.replace("promotion:", ";")
+            print(message.split(":"))
+            self.parent.side = int(message.split(":")[1])
             print(f"Assigned side: {self.parent.side}")
+            moves = message.split(":")[3]
+            print(f"Previous moves received: {moves}")
+            if moves != "[]":
+                move_list = moves.strip("[]").replace("'", "").split(", ")
+                for i, move in enumerate(move_list):
+                    if ";" in move:
+                        continue
+                    elif i + 1 < len(move_list) and ";" in move_list[i + 1]:
+                        self.parent.promotionpiece = move_list[i + 1].replace(";", "")
+                    print(move)
+                    self.parent.make_move(move)
+                print(f"Loaded previous moves: {move_list}")
         elif "promotion" in message:
             self.parent.promote_pawn(message)
         elif message == "stop":
@@ -1033,7 +1047,7 @@ class Pawn(Figure):
 
     def PromotionCheck(self, new_pos):
         if new_pos[1] == (7 if self.color == 0 else 0):
-            if self.parent.side != self.color:
+            if self.parent.side != self.color or self.parent.promotionpiece is not None:
                 self.validMovesList = []
                 while self.parent.promotionpiece is None:
                     QApplication.processEvents()
@@ -1401,7 +1415,6 @@ class WindowGui(QWidget):
         self.selected = None
         self.check = 0
         self.promotion_window = None
-        self.settings_window = None
         self.promoted = False
         self.emptyMap = [[None for _ in range(8)] for _ in range(8)]
         self.ThreatMap = copy.deepcopy(self.emptyMap)
@@ -1428,6 +1441,7 @@ class WindowGui(QWidget):
         self.connected = False
         self.gameconnected = False
 
+        self.settings_window = None
         self.PieceStyle = "ChessImgVec"
 
     def paintEvent(self, event):
@@ -1726,7 +1740,8 @@ class WindowGui(QWidget):
 
     def make_move(self, move: str):
         try:
-            move = move.replace("Opponent: ", "")
+            if "Opponent: " in move:
+                move = move.replace("Opponent: ", "")
             board = self.scanBoard()
             pos1 = (int(move[0]), int(move[1]))
             pos2 = (int(move[2]), int(move[3]))
