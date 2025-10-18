@@ -18,16 +18,16 @@ Task List:
 🟨 websocket online multiplayer
 ✅ Implement move history + Openings
 - Improve Performance
-- Clock Synchronization
+✅ Clock Synchronization
 - Improve Connection Handling
-- small bug after reconnection where Opening isnt updated properly
+- sometimes on reconnects or errors Stalemates happen
 - flip board when playing black
 """
 #ngrok http 8000
 
 ### Settings ###
 
-INCREMENT = 2           # Increment in seconds
+INCREMENT = 0           # Increment in seconds
 TIME = 5
 
 ################
@@ -193,6 +193,12 @@ class ChessClock(GuiElement):
         """Add time in milliseconds."""
         self.increment += (sec * 1000)
         self.update()
+
+    def update_time(self, ms):
+        """Set elapsed time in milliseconds."""
+        if self.addedTime < ms:
+            self.addedTime = ms
+            self.update()
 
 ### Line Object ###
 class Line(GuiElement):
@@ -547,8 +553,11 @@ class WebSocketClient:
                     elif i + 1 < len(move_list) and ";" in move_list[i + 1]:
                         self.parent.promotionpiece = move_list[i + 1].replace(";", "")
                     print(move)
+                    self.parent.repaint()
                     self.parent.make_move(move)
                 print(f"Loaded previous moves: {move_list}")
+        elif "time" in message:
+            self.parent.update_clocks(message)
         elif "promotion" in message:
             self.parent.promote_pawn(message)
         elif message == "stop":
@@ -1018,6 +1027,7 @@ class Figure(GuiElement):
             self.parent.selected = None
             self.parent.Client.send_message(f"{self.pos[0]}{self.pos[1]}{dropped_square[0]}{dropped_square[1]}")
             self.move(dropped_square)
+            self.parent.Client.send_message(self.parent.getTimes())
 
     def contains(self, pos):
         if self.picked:
@@ -1830,6 +1840,15 @@ class WindowGui(QWidget):
             self.WhiteClock.add_time(INCREMENT)
             self.BlackClock.start()
             self.SM.play("game-start")
+
+    def getTimes(self):
+        return f"time:{self.WhiteClock.addedTime};{self.BlackClock.addedTime}"
+
+    def update_clocks(self, message):
+        ms = message.replace("Opponent: time:", "")
+        time1, time2 = ms.split(";")
+        self.WhiteClock.update_time(int(time1))
+        self.BlackClock.update_time(int(time2))
 
     def updateGameState(self):
         board = self.scanBoard()

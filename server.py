@@ -95,6 +95,8 @@ async def websocket_endpoint(websocket: WebSocket):
             print(f"Received: {data}")
             # Broadcast to all other clients
             await manager.broadcast(f"Opponent: {data}", sender=websocket)
+            if "time" in data:
+                continue
             manager.movelist.append(data)
     except WebSocketDisconnect:
         print("WebSocketDisconnect exception caught - client disconnected normally")
