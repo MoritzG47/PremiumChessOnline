@@ -21,7 +21,7 @@ Task List:
 ✅ Clock Synchronization
 - Improve Connection Handling
 - sometimes on reconnects or errors Stalemates happen
-- flip board when playing black
+✅ flip board when playing black
 """
 #ngrok http 8000
 
@@ -495,6 +495,7 @@ class Textbox(GuiElement):
         """Reset scrollbar mode on drag release."""
         self.scrollbar_mode = 0
 
+
 class WebSocketClient:
     def __init__(self, player_name, parent=None):
         super().__init__()
@@ -542,7 +543,10 @@ class WebSocketClient:
             message = message.replace("promotion:", ";")
             print(message.split(":"))
             self.parent.side = int(message.split(":")[1])
+            self.parent.init_chess()
             print(f"Assigned side: {self.parent.side}")
+            if self.parent.side == 1:
+                self.parent.flipboard()
             moves = message.split(":")[3]
             print(f"Previous moves received: {moves}")
             if moves != "[]":
@@ -577,7 +581,6 @@ class WebSocketClient:
     def on_error(self, error):
         print(f"WebSocket error: {error}")
 
-### Knocked Pieces Object ###
 class KnockedPieces(GuiElement):
     def __init__(self, parent=None):
         super().__init__(0, 0, 0, 0, 0, parent)
@@ -603,7 +606,10 @@ class KnockedPieces(GuiElement):
             for piece, counts in self.pieces.items():
                 for _ in range(counts[color]):
                     xpos = x - n * self.offset - (self.group_offset * group_count[color])
-                    ypos = y + (color * (self.WinHeight - self.imagesize))
+                    if self.parent.side == 0:
+                        ypos = y + (color * (self.WinHeight - self.imagesize))
+                    else:
+                        ypos = y + ((1 - color) * (self.WinHeight - self.imagesize))
                     painter.drawPixmap(int(xpos), int(ypos), self.imgdict[piece][color])
                     n += 1
                 if counts[color] > 0:
@@ -707,6 +713,7 @@ class Figure(GuiElement):
         pieceMap = {"Pawn": "p", "Knight": "n", "Bishop": "b",
                     "Rook": "r", "Queen": "q", "King": "k"}
         self.pgnChar = pieceMap[self.__class__.__name__]
+        self.side = self.parent.side
 
     ### Properties ###
     @property
@@ -910,13 +917,14 @@ class Figure(GuiElement):
         ### Move logic and new valid Moves ###
         castle = 0
         if isinstance(self, King) and abs(self.pos[0] - new_pos[0]) == 2:
-            if new_pos[0] == 6:  # Kingside
-                rook = board[self.pos[1]][7]
-                rook.pos = (5, self.pos[1])
+            CastlePos = [(6, 2, 5, 3), (1, 5, 2, 4)][self.side]
+            if new_pos[0] == CastlePos[0]:  # Kingside
+                rook = board[self.pos[1]][7 if self.side == 0 else 0]
+                rook.pos = (CastlePos[2], self.pos[1])
                 castle = 1
-            elif new_pos[0] == 2:  # Queenside
-                rook = board[self.pos[1]][0]
-                rook.pos = (3, self.pos[1])
+            elif new_pos[0] == CastlePos[1]:  # Queenside
+                rook = board[self.pos[1]][0 if self.side == 0 else 7]
+                rook.pos = (CastlePos[3], self.pos[1])
                 castle = 2
             self.parent.SM.play("castle")
 
@@ -966,7 +974,10 @@ class Figure(GuiElement):
 
         disambiguate = ""
         if self.__class__.__name__ == "Pawn" and target is not None:
-            disambiguate = chr(prev_pos[0]+97)
+            if self.side == 0:
+                disambiguate = chr(prev_pos[0]+97)
+            else:
+                disambiguate = chr(7 - prev_pos[0]+97)
         elif self.__class__.__name__ != "Pawn":
             same_type_pieces = [fig for row in board for fig in row if fig is not None and fig.color == self.color and fig.__class__ == self.__class__ and fig != self]
             same_row = False
@@ -979,11 +990,14 @@ class Figure(GuiElement):
                         same_row = True
                     else:
                         same_row = True
+            if self.side == 1:
+                prev_pos = (7 - prev_pos[0], 7 - prev_pos[1])
             if same_row:
                 disambiguate += chr(prev_pos[0]+97)
             if same_column:
                 disambiguate += str(prev_pos[1]+1)
-
+        if self.side == 1:
+            new_pos = (7 - new_pos[0], 7 - new_pos[1])
         Move = f"{PieceNameMap[self.__class__.__name__]}{disambiguate}{'x' if target else ''}{chr(new_pos[0]+97)}{new_pos[1]+1}"
         if promo is not None:
             Move += f"={PieceNameMap[promo]}"
@@ -991,8 +1005,6 @@ class Figure(GuiElement):
             Move = "O-O"
         elif castle == 2:
             Move = "O-O-O"
-        #if self.MoveCount() % 2 == 1:
-        #    Move = f"{(self.MoveCount() // 2 )+ 1}.{Move}"
         return Move
 
     def ThreefoldDrawCheck(self):
@@ -1042,7 +1054,7 @@ class Figure(GuiElement):
 class Pawn(Figure):
     def __init__(self, pos, color, parent=None):
         super().__init__(pos, color, parent)
-        self.direction_vectors = [(0, 1)] if color == 0 else [(0, -1)]
+        self.direction_vectors = [(0, 1)] if color == self.side else [(0, -1)]
         self.range = 1
 
     def EnPassantCheck(self, new_pos):
@@ -1059,8 +1071,8 @@ class Pawn(Figure):
                 self.EnPassant = True
 
     def PromotionCheck(self, new_pos):
-        if new_pos[1] == (7 if self.color == 0 else 0):
-            if self.parent.side != self.color or self.parent.promotionpiece is not None:
+        if new_pos[1] == (7 if self.color == self.side else 0):
+            if self.side != self.color or self.parent.promotionpiece is not None:
                 self.validMovesList = []
                 while self.parent.promotionpiece is None:
                     QApplication.processEvents()
@@ -1106,7 +1118,7 @@ class Pawn(Figure):
 
     def specialFilters(self, board, moves):
         special_filtered = []
-        step = 1 if self.color == 0 else -1
+        step = 1 if self.color == self.side else -1
         x, y = self.pos
 
         # --- Forward moves ---
@@ -1118,7 +1130,7 @@ class Pawn(Figure):
             special_filtered.append((x, one_step_y))
 
             # Double forward move (only from starting rank)
-            if ((self.color == 0 and y == 1) or (self.color == 1 and y == 6)) and board[two_step_y][x] is None:
+            if y == 1 and board[two_step_y][x] is None:
                 special_filtered.append((x, two_step_y))
 
         # --- Diagonal captures (including en passant) ---
@@ -1535,9 +1547,9 @@ class WindowGui(QWidget):
         self.last_mouse_pos = QPointF(0, 0)
         self.Movepos = QPointF(0, 0)
 
+        self.side = side
         self.SVG = SVGManager()
         self.init_gui()
-        self.init_chess()
         self.PickedPiece = None
         self.selected = None
         self.check = 0
@@ -1551,17 +1563,12 @@ class WindowGui(QWidget):
         self.Marker = []
         self.squaresize = self.WindowWidth / 8
 
-        self.MoveCount = 0
-        self.updateGameState()
-        self.MoveCount = 1
-
         self.SM = SoundManager()
         self.knocked_pieces = KnockedPieces(parent=self)
 
         self.MHList = []
         self.prevMHList = []
         self.fiftyMoveCounter = 0
-        self.side = side
 
         self.Client = WebSocketClient("Client1", self)
         self.promotionpiece = None
@@ -1748,13 +1755,13 @@ class WindowGui(QWidget):
                     parent=self,
                 )
        
-
+        clock_side = 50 if self.side == 0 else -50
         self.WhiteClock = ChessClock(
             text="Clock",
             color=QColor(0, 0, 0, 120),
             textcolor=QColor(255, 255, 255),
             xpos=self.WindowWidth + 20,
-            ypos=self.WindowHeight/2 + 50 + self.ExitSize/2,
+            ypos=self.WindowHeight/2 + clock_side + self.ExitSize/2,
             fontsize=18,
             pen=None,
             parent=self,
@@ -1766,12 +1773,15 @@ class WindowGui(QWidget):
             color=QColor(0, 0, 0, 120),
             textcolor=QColor(255, 255, 255),
             xpos=self.WindowWidth + 20,
-            ypos=self.WindowHeight/2 - 50 + self.ExitSize/2,
+            ypos=self.WindowHeight/2 - clock_side + self.ExitSize/2,
             fontsize=18,
             pen=None,
             parent=self,
             time_min=TIME
         )
+        self.MoveCount = 0
+        self.updateGameState()
+        self.MoveCount = 1
 
     def init_animations(self, winner, result):
         shade = 0.4
@@ -1885,8 +1895,8 @@ class WindowGui(QWidget):
             if "Opponent: " in move:
                 move = move.replace("Opponent: ", "")
             board = self.scanBoard()
-            pos1 = (int(move[0]), int(move[1]))
-            pos2 = (int(move[2]), int(move[3]))
+            pos1 = (7-int(move[0]), 7-int(move[1]))
+            pos2 = (7-int(move[2]), 7-int(move[3]))
             piece = board[pos1[1]][pos1[0]]
             if piece is not None:
                 piece.move(pos2)
@@ -2107,6 +2117,16 @@ class WindowGui(QWidget):
     def promote_pawn(self, message):
         piece = message.replace("Opponent: promotion:", "")
         self.promotionpiece = piece
+
+    def flipboard(self):
+        for element in self._gui_elements:
+            if isinstance(element, Figure):
+                x, y = element.pos
+                new_x = 7 - x
+                new_y = 7 - y
+                element.pos = (new_x, new_y)
+        self.updateGameState()
+        self.update()
 
     ## Window Control Methods ###
     def open_settings(self):
