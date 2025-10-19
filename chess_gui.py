@@ -32,7 +32,7 @@ TIME = 5
 
 ################
 
-from PyQt5.QtWidgets import QWidget, QApplication, QSystemTrayIcon, QMenu, QAction, QLabel, QLineEdit, QVBoxLayout
+from PyQt5.QtWidgets import QWidget, QApplication, QSystemTrayIcon, QMenu, QAction, QLabel, QLineEdit
 from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QPixmap, QFontMetrics, QIcon, QTransform, QPainterPath
 from PyQt5.QtCore import QRectF, Qt, QPointF
 from PyQt5.QtSvg import QSvgRenderer
@@ -43,7 +43,6 @@ from screeninfo import get_monitors
 import sys, os, math, csv, copy
 import subprocess, time, requests, socket
 import re
-import pprint
 from PyQt5.QtWebSockets import QWebSocket
 from PyQt5.QtCore import QUrl
 from PyQt5.QtNetwork import QAbstractSocket
@@ -2424,7 +2423,8 @@ class WindowGui(QWidget):
             self.MHTextbox.set_text(MHText)
 
             rowname = "moves_list"
-            with open("openings.csv", newline='', encoding='utf-8') as f:
+            openingspath = os.path.join(self.path, "openings.csv")
+            with open(openingspath, newline='', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     if row[rowname] == f"{OpeningList}":
