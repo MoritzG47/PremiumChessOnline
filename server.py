@@ -2,6 +2,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import asyncio
+import os
 
 app = FastAPI()
 
@@ -116,6 +117,17 @@ async def status():
         "openside_0": manager.openside[0] is not None,
         "openside_1": manager.openside[1] is not None
     }
+@app.post("/shutdown")
+async def shutdown():
+    if manager.active_connections == []:
+        print("Shutting down server as requested.")
+    else:
+        print("Shutdown requested but clients are still connected.")
+        return {"message": "Cannot shutdown, clients are still connected."}
+    os._exit(0)
+
+def main():
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    main()

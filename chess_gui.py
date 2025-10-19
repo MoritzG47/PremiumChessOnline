@@ -24,7 +24,7 @@ Task List:
 ✅ flip board when playing black
 """
 #ngrok http 8000
-
+#C:\Users\morit\AppData\Local\ngrok
 ### Settings ###
 
 INCREMENT = 0           # Increment in seconds
@@ -32,7 +32,7 @@ TIME = 5
 
 ################
 
-from PyQt5.QtWidgets import QWidget, QApplication, QSystemTrayIcon, QMenu, QAction, QLabel
+from PyQt5.QtWidgets import QWidget, QApplication, QSystemTrayIcon, QMenu, QAction, QLabel, QLineEdit, QVBoxLayout
 from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QPixmap, QFontMetrics, QIcon, QTransform, QPainterPath
 from PyQt5.QtCore import QRectF, Qt, QPointF
 from PyQt5.QtSvg import QSvgRenderer
@@ -41,6 +41,8 @@ from PyQt5.QtMultimedia import QSoundEffect
 from PyQt5.QtCore import QPropertyAnimation, QEasingCurve, QParallelAnimationGroup
 from screeninfo import get_monitors
 import sys, os, math, csv, copy
+import subprocess, time, requests, socket
+import re
 import pprint
 from PyQt5.QtWebSockets import QWebSocket
 from PyQt5.QtCore import QUrl
@@ -501,9 +503,10 @@ class WebSocketClient:
         super().__init__()
         self.parent = parent
         self.player_name = player_name
+        self.ip = "wss://superdiabolically-tres-kingston.ngrok-free.dev/ws"
         self.websocket = QWebSocket()
         self.connect_to_server()     
-      
+        
         # WebSocket signals
         self.websocket.connected.connect(self.on_connected)
         self.websocket.disconnected.connect(self.on_disconnected)
@@ -512,7 +515,7 @@ class WebSocketClient:
         
     def connect_to_server(self):
         # Change this URL to match your server
-        url = QUrl("wss://superdiabolically-tres-kingston.ngrok-free.dev/ws")    #"ws://localhost:8000/ws"
+        url = QUrl(self.ip)    #"ws://localhost:8000/ws"
         self.websocket.open(url)
         
     def disconnect_from_server(self):
@@ -533,6 +536,7 @@ class WebSocketClient:
         print("Connected to server!")
 
     def on_disconnected(self):
+        self.parent.clearBoard()
         self.parent.connected = False
         self.parent.gameconnected = False
         self.parent.update()
@@ -1100,7 +1104,7 @@ class Pawn(Figure):
                                                 (self.squaresize*1.2)/2,
                                                 squaresize=self.squaresize*1.2,
                                                 color=self.color)
-                self.parent.promotion_window = promotion_window
+                self.parent.popup_windows[0] = promotion_window
                 self.validMovesList = []
                 while promotion_window.selected_piece is None:
                     QApplication.processEvents()
@@ -1297,7 +1301,7 @@ class PromotionWindow(QWidget):
         self.close()  # closes the popup
 
     def closeEvent(self, a0):
-        self.parent.promotion_window = None
+        self.parent.popup_windows[0] = None
         return super().closeEvent(a0)
 
 ### Settings Window ###
@@ -1517,8 +1521,302 @@ class SettingsWindow(QWidget):
         self.parent.update()
 
     def closeEvent(self, a0):
-        self.parent.settings_window = None
+        self.parent.popup_windows[1] = None
         return super().closeEvent(a0)
+
+### Connection Window
+class ConnectionWindow(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.parent = parent
+        self.topleft = self.parent.topleft
+        self.WinWidth = int(self.parent.WindowWidth/2)
+        self.WinHeight = int(self.parent.WindowHeight/4)
+        self.xpos = int((self.parent.WindowWidth - self.WinWidth) / 2)
+        self.ypos = int((self.parent.WindowHeight - self.WinHeight) / 2)
+        self.BGcolor = QColor(40, 40, 40, 100)
+        self.selectColor = QColor(50, 50, 150, 150)
+        self.color = QColor(50, 50, 50, 200)
+        self.path = os.path.dirname(os.path.abspath(__file__))
+
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        monitor = get_monitors()[0]
+        self.setGeometry(0, 0, monitor.width, monitor.height)
+        self.selectedButton = [None, None]
+        self.initButtons = []
+        self.imageList = []
+        self.connectionList = [False, False, False]
+        self.connectionInfo()
+
+        self.init_gui()
+        self.connectionImages()
+        self.show()
+
+    def init_gui(self):
+        self.ExitSize = 40
+        exitImgPath = os.path.join(self.path, "images", "Exit_Icon.png")
+        ExitImage = QPixmap(exitImgPath)
+        ExitImage = ExitImage.scaled(int(
+            self.ExitSize*0.8), int(self.ExitSize*0.8), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.ExitButton = Button(text="Exit",
+                                 image=ExitImage,
+                                 width=self.ExitSize+40,
+                                 height=self.ExitSize,
+                                 color=QColor(255, 0, 0, 160),
+                                 textcolor=QColor(255, 255, 255),
+                                 hovercolor=QColor(255, 0, 0, 220),
+                                 hovertextcolor=QColor(255, 255, 255),
+                                 xpos=self.xpos + self.WinWidth - (self.ExitSize + 40),
+                                 ypos=self.ypos - self.ExitSize - 2,
+                                 action=self.close,
+                                 parent=self)
+
+        width = self.ExitSize*4.5
+        height = self.ExitSize*1.5
+        self.ConnectButton = Button(text="Connect",
+                                 width=width,
+                                 height=height,
+                                 xpos=int(self.xpos + self.WinWidth/2 - 3*width/2),
+                                 ypos=int(self.ypos + self.WinHeight - height*2),
+                                 action=self.connect,
+                                 parent=self)
+
+        self.DisconnectButton = Button(text="Disconnect",
+                                 width=width,
+                                 height=height,
+                                 xpos=int(self.xpos + self.WinWidth/2 + width/2),
+                                 ypos=int(self.ypos + self.WinHeight - height*2),
+                                 action=self.parent.Client.disconnect_from_server,
+                                 parent=self)
+
+        height = self.ExitSize*1.2
+        serverText = "Start Server" if self.parent.ServerSubprocess is None else "Stop Server"
+        self.StartServerButton = Button(text=serverText,
+                                 width=width,
+                                 height=height,
+                                 xpos=int(self.xpos + self.WinWidth/2 + width/2),
+                                 ypos=int(self.ypos + 10),
+                                 action=self.start_server,
+                                 fontsize=9,
+                                 parent=self)
+
+        self.StartngrokButton = Button(text="Start ngrok",
+                                 width=width,
+                                 height=height,
+                                 xpos=int(self.xpos + self.WinWidth/2 + width/2),
+                                 ypos=int(self.ypos + height + 20),
+                                 action=self.start_ngrok,
+                                 fontsize=9,
+                                 parent=self)
+
+        UpdateImgPath = os.path.join(self.path, "images", "Update_Icon.png")
+        UpdateImage = QPixmap(UpdateImgPath)
+        UpdateImage = UpdateImage.scaled(int(
+            height*0.8), int(height*0.8), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        height = self.ExitSize*1.5
+        self.updateButton = Button(text="Update Status",
+                                    image=UpdateImage,
+                                 width=height,
+                                 height=height,
+                                 xpos=int(self.xpos + self.WinWidth/2 - height/2),
+                                 ypos=int(self.ypos + self.WinHeight - height*2),
+                                 action=self.connectionInfo,
+                                 parent=self)
+
+        self.initButtons.append(self.ExitButton)
+        self.initButtons.append(self.ConnectButton)
+        self.initButtons.append(self.DisconnectButton)
+        self.initButtons.append(self.StartServerButton)
+        self.initButtons.append(self.StartngrokButton)
+        self.initButtons.append(self.updateButton)
+
+        self.textbox = QLineEdit(self)
+        self.textbox.setFont(QFont("Consolas", 9))
+        self.textbox.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(255, 255, 255, 200);
+                border: 1px solid rgba(0, 0, 0, 200);
+                border-radius: 5px;
+                padding: 5px;
+            }
+        """)
+        self.textbox.setText(self.parent.Client.ip)
+        x = int(self.topleft.x() + self.xpos + self.WinWidth*0.05)
+        y = int(self.topleft.y() + self.ypos + self.WinHeight*0.4)
+        width = int(self.WinWidth*0.9)
+        height = int(40)
+        self.textbox.setGeometry(x, y, width, height)
+
+    def connectionImages(self):
+        self.imageList = []
+        pathList = ["PC_Icon", "Internet_Icon", "Server_Icon"]
+
+        for i, path in enumerate(pathList):
+            path = os.path.join(self.path, "images", path + ("green" if self.connectionList[i] else "") + ".png")
+            image = QPixmap(path)
+            image = image.scaled(int(self.WinWidth*0.15), int(self.WinWidth*0.15), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.imageList.append(image)
+
+    def paintEvent(self, event):
+        self.topleft = self.parent.topleft
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        rect = QRectF(self.topleft.x() + self.xpos, self.topleft.y() + self.ypos, 
+                      self.WinWidth, self.WinHeight)
+        painter.setBrush(self.BGcolor)
+        painter.drawRect(rect)
+
+        x = int(self.topleft.x() + self.xpos + self.WinWidth*0.05)
+        y = int(self.topleft.y() + self.ypos + self.WinHeight*0.4)
+        self.textbox.move(x, y)
+
+        for i, image in enumerate(self.imageList):
+            painter.drawPixmap(int(self.topleft.x() + self.xpos + self.WinWidth*0.05) + i*int(self.WinWidth*0.2), 
+                               int(self.topleft.y() + self.ypos + self.WinHeight*0.07), image)
+
+        for button in self.initButtons:
+            button.paint(painter)
+
+    def mouseMoveEvent(self, event):
+        #for button in self.buttons:
+        #    button.hovered = button.contains(event.pos())
+        self.update()
+
+    def mousePressEvent(self, event):
+        for button in self.initButtons:
+            if button.contains(event.pos()):
+                button.on_click()
+                self.update()
+
+    def contains(self, pos):
+        rect = QRectF(self.xpos, self.ypos, self.width, self.height)
+        return rect.contains(pos)
+
+    def connect(self):
+        self.parent.Client.ip = self.textbox.text()
+        self.parent.Client.connect_to_server()
+
+    def connectionInfo(self):
+        url = self.parent.Client.ip
+        url = url.replace("wss", "https")
+        url = url.replace("ws", "")
+        try:
+            r = requests.get(url, timeout=100, allow_redirects=True, headers={"User-Agent": "err-finder/1.0"})
+        except requests.RequestException as e:
+            self.connectionList = [False, False, False]
+
+        codes = re.findall(r"ERR_NGROK[-_A-Z0-9]+", r.text, flags=re.IGNORECASE)
+        if codes:
+            for c in codes:
+                if c == "ERR_NGROK_3200":
+                    self.connectionList = [True, False, False]
+                elif c == "ERR_NGROK_8012":
+                    self.connectionList = [True, True, False]
+                print(c)
+        else:
+            self.connectionList = [True, True, True]
+        self.connectionImages()
+
+    def start_server(self):
+        if self.parent.ServerSubprocess is not None:
+            print("Stopping FastAPI server subprocess...")
+            self.parent.ServerSubprocess.terminate()
+            self.parent.ServerSubprocess = None
+            self.StartServerButton.text = "Start Server"
+            self.update()
+            return
+        
+        def is_port_in_use(port: int) -> bool:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                return s.connect_ex(("127.0.0.1", port)) == 0
+        
+        if is_port_in_use(8000):
+            print("Server already running.")
+            return None
+
+        print("Starting FastAPI server as subprocess...")
+        proc = subprocess.Popen(
+            ["python", "-m", "server"],  # assuming server.py has main()
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT
+        )
+        time.sleep(1)
+        self.parent.ServerSubprocess = proc
+        self.StartServerButton.text = "Stop Server"
+        self.update()
+
+    def start_ngrok(self):
+        if getattr(self.parent, "NgrokSubprocess", None) is not None:
+            print("Stopping ngrok tunnel subprocess...")
+            try:
+                self.parent.NgrokSubprocess.terminate()
+                self.parent.NgrokSubprocess.wait(timeout=3)
+            except Exception:
+                self.parent.NgrokSubprocess.kill()
+            self.parent.NgrokSubprocess = None
+            self.StartngrokButton.text = "Start ngrok"
+            self.update()
+            return
+
+        # --- Check if ngrok is already running externally ---
+        def is_ngrok_running() -> bool:
+            try:
+                # ngrok API is available locally on port 4040 by default
+                r = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=1)
+                return r.status_code == 200
+            except requests.exceptions.RequestException:
+                return False
+
+        if is_ngrok_running():
+            print("ngrok is already running on port 4040.")
+            return
+
+        # --- Start ngrok as subprocess ---
+        print("🚀 Starting ngrok tunnel subprocess...")
+
+        try:
+            proc = subprocess.Popen(
+                ["ngrok", "http", "8000"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True
+            )
+        except FileNotFoundError:
+            print("❌ ngrok executable not found! Make sure ngrok is installed and in PATH.")
+            return
+
+        # --- Give ngrok a moment to initialize ---
+        time.sleep(3)
+
+        # --- Verify ngrok actually started ---
+        if not is_ngrok_running():
+            print("Failed to start ngrok. Check your authentication or configuration.")
+            proc.terminate()
+            return
+
+        # --- Retrieve public URL ---
+        try:
+            tunnels = requests.get("http://127.0.0.1:4040/api/tunnels").json()
+            public_url = tunnels["tunnels"][0]["public_url"]
+            print(f"ngrok is online: {public_url}")
+            self.parent.Client.ip = public_url.replace("https", "wss") + "/ws"
+            self.parent.NgrokURL = public_url
+        except Exception as e:
+            print(f"ngrok started but URL not found: {e}")
+            self.parent.NgrokURL = None
+
+        # --- Update UI and state ---
+        self.parent.NgrokSubprocess = proc
+        self.StartngrokButton.text = "Stop ngrok"
+        self.update()
+
+    def closeEvent(self, a0):
+        self.parent.popup_windows[2] = None
+        return super().closeEvent(a0)
+
 
 ### Main Window ###
 class WindowGui(QWidget):
@@ -1553,7 +1851,7 @@ class WindowGui(QWidget):
         self.PickedPiece = None
         self.selected = None
         self.check = 0
-        self.promotion_window = None
+        self.popup_windows = [None, None, None]  # promotion, settings, connection
         self.promoted = False
         self.emptyMap = [[None for _ in range(8)] for _ in range(8)]
         self.ThreatMap = copy.deepcopy(self.emptyMap)
@@ -1575,9 +1873,10 @@ class WindowGui(QWidget):
         self.connected = False
         self.gameconnected = False
 
-        self.settings_window = None
         self.PieceStyle = "ChessImgVec"
         self.BoardStyle = "classic"
+        
+        self.ServerSubprocess = None
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -1600,7 +1899,7 @@ class WindowGui(QWidget):
         painter.setPen(Qt.NoPen)
         painter.drawPath(winrect)
 
-        connecttext = "Connected" if self.connected else "Disconnected"
+        connecttext = "Connected" if self.connected else "No Connection"
         connectcolor = QColor(0, 200, 0, 180) if self.connected else QColor(200, 0, 0, 180)
         if self.side == -1:
             connecttext = "Spectating"
@@ -1609,10 +1908,10 @@ class WindowGui(QWidget):
         painter.setFont(QFont('Arial', 12))
         painter.drawText(QRectF(self.topleft.x() + 10, self.topleft.y() + 10, 350, 30), Qt.AlignLeft | Qt.AlignVCenter, "You: " + connecttext)
         
-        connecttext = "Connected" if self.gameconnected else "Disconnected"
+        connecttext = "Connected" if self.gameconnected else "No Connection"
         connectcolor = QColor(0, 200, 0, 180) if self.gameconnected else QColor(200, 0, 0, 180)
         painter.setPen(QPen(connectcolor))
-        painter.drawText(QRectF(self.topleft.x() + self.WindowWidth - 800, self.topleft.y() + 10, 350, 30), Qt.AlignLeft | Qt.AlignVCenter, "Opponent: " + connecttext)
+        painter.drawText(QRectF(self.topleft.x() + self.WindowWidth - 850, self.topleft.y() + 10, 370, 30), Qt.AlignLeft | Qt.AlignVCenter, "Opponent: " + connecttext)
 
         self.chess_pattern(painter, self.BoardStyle)
 
@@ -1698,9 +1997,49 @@ class WindowGui(QWidget):
                                      ypos=0,
                                      pen=True,
                                      parent=self)
+        ConnectionImage = QPixmap(os.path.join(self.path, "images", "Connection_Icon.png"))
+        ConnectionImage = ConnectionImage.scaled(int(
+            self.ExitSize*0.8), int(self.ExitSize*0.8), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.ConnectionButton = Button(text="Connection",
+                                     color=QColor(0, 0, 0, 0),
+                                     hovercolor=QColor(255, 255, 255, 40),
+                                     action=self.open_connection_window,
+                                     image=ConnectionImage,
+                                     width=self.ExitSize+40,
+                                     height=self.ExitSize,
+                                     xpos=self.WindowWidth -
+                                     (self.ExitSize + 40)*5,
+                                     ypos=0,
+                                     pen=True,
+                                     parent=self)
 
         # Example Line
         self.Line = Line(0, 50, self.WindowWidth, 50, width=2, parent=self)
+
+        clock_side = 50 if self.side == 0 else -50
+        self.WhiteClock = ChessClock(
+            text="Clock",
+            color=QColor(0, 0, 0, 120),
+            textcolor=QColor(255, 255, 255),
+            xpos=self.WindowWidth + 20,
+            ypos=self.WindowHeight/2 + clock_side + self.ExitSize/2,
+            fontsize=18,
+            pen=None,
+            parent=self,
+            time_min=TIME
+        )
+
+        self.BlackClock = ChessClock(
+            text="Clock",
+            color=QColor(0, 0, 0, 120),
+            textcolor=QColor(255, 255, 255),
+            xpos=self.WindowWidth + 20,
+            ypos=self.WindowHeight/2 - clock_side + self.ExitSize/2,
+            fontsize=18,
+            pen=None,
+            parent=self,
+            time_min=TIME
+        )
 
     ### Chess Related Methods ###
     def chess_pattern(self, painter, var="classic"):
@@ -1755,30 +2094,6 @@ class WindowGui(QWidget):
                     parent=self,
                 )
        
-        clock_side = 50 if self.side == 0 else -50
-        self.WhiteClock = ChessClock(
-            text="Clock",
-            color=QColor(0, 0, 0, 120),
-            textcolor=QColor(255, 255, 255),
-            xpos=self.WindowWidth + 20,
-            ypos=self.WindowHeight/2 + clock_side + self.ExitSize/2,
-            fontsize=18,
-            pen=None,
-            parent=self,
-            time_min=TIME
-        )
-
-        self.BlackClock = ChessClock(
-            text="Clock",
-            color=QColor(0, 0, 0, 120),
-            textcolor=QColor(255, 255, 255),
-            xpos=self.WindowWidth + 20,
-            ypos=self.WindowHeight/2 - clock_side + self.ExitSize/2,
-            fontsize=18,
-            pen=None,
-            parent=self,
-            time_min=TIME
-        )
         self.MoveCount = 0
         self.updateGameState()
         self.MoveCount = 1
@@ -1895,8 +2210,12 @@ class WindowGui(QWidget):
             if "Opponent: " in move:
                 move = move.replace("Opponent: ", "")
             board = self.scanBoard()
-            pos1 = (7-int(move[0]), 7-int(move[1]))
-            pos2 = (7-int(move[2]), 7-int(move[3]))
+            if self.MoveCount % 2 == self.side:
+                pos1 = (7-int(move[0]), 7-int(move[1]))
+                pos2 = (7-int(move[2]), 7-int(move[3]))
+            else:
+                pos1 = (int(move[0]), int(move[1]))
+                pos2 = (int(move[2]), int(move[3]))
             piece = board[pos1[1]][pos1[0]]
             if piece is not None:
                 piece.move(pos2)
@@ -2128,17 +2447,45 @@ class WindowGui(QWidget):
         self.updateGameState()
         self.update()
 
+    def clearBoard(self):
+        for element in self._gui_elements[:]:
+            if isinstance(element, Figure):
+                element.kill()
+        self.update()
+
     ## Window Control Methods ###
     def open_settings(self):
-        if self.promotion_window is not None and self.promotion_window.isVisible():
-            return
-        if self.settings_window is None or not self.settings_window.isVisible():
-            self.settings_window = SettingsWindow(parent=self, squaresize=self.squaresize*1.2)
-        
+        for idx, window in enumerate(self.popup_windows):
+            if idx == 1:  # skip the settings window slot
+                continue
+            if window is not None and window.isVisible():
+                return
+        if self.popup_windows[1] is None or not self.popup_windows[1].isVisible():
+            self.popup_windows[1] = SettingsWindow(parent=self, squaresize=self.squaresize*1.2)
+
+    def open_connection_window(self):
+        for idx, window in enumerate(self.popup_windows):
+            if idx == 2:  # skip the connection window slot
+                continue
+            if window is not None and window.isVisible():
+                return
+        if self.popup_windows[2] is None or not self.popup_windows[2].isVisible():
+            self.popup_windows[2] = ConnectionWindow(parent=self)
+
+    def close_server(self):
+        try:
+            self.Client.disconnect_from_server()
+            r = requests.post("http://127.0.0.1:8000/shutdown", timeout=2)
+            if r.status_code == 200:
+                pass
+        except requests.exceptions.RequestException:
+            pass
+
     def close_app(self):
         print("Exiting application")
         self.SM.shutdown()
         self.SVG.shutdown()
+        self.close_server()
         QApplication.quit()
         QApplication.processEvents()
         self.hide()
@@ -2147,10 +2494,9 @@ class WindowGui(QWidget):
         
     def hide_app(self):
         self.hide()
-        if self.promotion_window:
-            self.promotion_window.hide()
-        if self.settings_window:
-            self.settings_window.hide()
+        for window in self.popup_windows:
+            if window:
+                window.hide()
         if not hasattr(self, 'tray_icon'):
             self.tray_icon = QSystemTrayIcon(self)
             svg_pixmap = self.SVG.getSVG("KingWhite", 64)
@@ -2170,10 +2516,9 @@ class WindowGui(QWidget):
 
     def show_menu(self):
         self.show()
-        if self.promotion_window:
-            self.promotion_window.show()
-        if self.settings_window:
-            self.settings_window.show()
+        for window in self.popup_windows:
+            if window:
+                window.show()
         self.activateWindow()
         self.update()
 
@@ -2240,10 +2585,9 @@ class WindowGui(QWidget):
                 new_rect = QRect(cx - target_w // 2, cy - target_h // 2, target_w, target_h)
                 key.setGeometry(new_rect)
             self.update()
-            if self.promotion_window:
-                self.promotion_window.update()
-            if self.settings_window:
-                self.settings_window.update()
+            for window in self.popup_windows:
+                if window:
+                    window.update()
         self.check_hover(event.pos())
 
     def wheelEvent(self, event):
